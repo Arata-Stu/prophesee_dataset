@@ -1,0 +1,10 @@
+mode: gen4
+
+input_dir: "/Users/at/dataset/gen4/"
+output_dir: "/Users/at/dataset/gen4_pre/"
+num_processors: 2
+
+tau_ms: 50       # イベントを取得する間隔（ミリ秒）
+delta_t_ms: 50   # 各取得におけるイベントの長さ（ミリ秒）
+
+frame_shape: [720, 1280]
