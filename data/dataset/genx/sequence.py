@@ -76,7 +76,7 @@ class SequenceDataset(Dataset):
         for i in range(start_idx, min(end_idx, len(self.data_files))):
             data_file = self.data_files[i]
             with np.load(data_file, allow_pickle=True) as data:
-                event_frame = data['events']
+                event_frame = data['event']
                 labels = data['labels']
                 
                 frames.append(torch.from_numpy(event_frame).permute(2, 0, 1))
