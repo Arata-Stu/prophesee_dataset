@@ -7,6 +7,7 @@ from multiprocessing import Pool, cpu_count, get_context
 import yaml
 import argparse
 import re
+import cv2  # OpenCVを使用して解像度変更
 
 # BBOXデータタイプ
 BBOX_DTYPE = np.dtype({
@@ -15,20 +16,6 @@ BBOX_DTYPE = np.dtype({
     'offsets': [0, 8, 12, 16, 20, 24, 28, 32],
     'itemsize': 40
 })
-
-def create_event_frame(slice_events, frame_shape):
-    height, width = frame_shape
-    frame = np.ones((height, width, 3), dtype=np.uint8) * 114  # グレーバックグラウンド
-
-    # オン・オフイベントのマスクを作成
-    off_events = (slice_events['p'] == -1)
-    on_events = (slice_events['p'] == 1)
-
-    # オンイベントを赤、オフイベントを青に割り当て
-    frame[slice_events['y'][off_events], slice_events['x'][off_events]] = np.array([0, 0, 255], dtype=np.uint8)
-    frame[slice_events['y'][on_events], slice_events['x'][on_events]] = np.array([255, 0, 0], dtype=np.uint8)
-
-    return frame
 
 def find_event_and_bbox_files(sequence_dir, mode):
     """指定されたディレクトリ内でイベントデータとBBOXファイルを検索し、`gen1`と`gen4`で処理を分ける"""
@@ -54,8 +41,26 @@ def find_event_and_bbox_files(sequence_dir, mode):
         raise FileNotFoundError(f"イベントまたはBBOXファイルが見つかりません: {sequence_dir}")
     return event_file, bbox_file
 
+def create_event_frame(slice_events, frame_shape, downsample=False):
+    height, width = frame_shape
+    frame = np.ones((height, width, 3), dtype=np.uint8) * 114  # グレーバックグラウンド
+
+    # オン・オフイベントのマスクを作成
+    off_events = (slice_events['p'] == -1)
+    on_events = (slice_events['p'] == 1)
+
+    # オンイベントを赤、オフイベントを青に割り当て
+    frame[slice_events['y'][off_events], slice_events['x'][off_events]] = np.array([0, 0, 255], dtype=np.uint8)
+    frame[slice_events['y'][on_events], slice_events['x'][on_events]] = np.array([255, 0, 0], dtype=np.uint8)
+
+    # downsampleがTrueの場合、解像度を半分にする
+    if downsample:
+        frame = cv2.resize(frame, (width // 2, height // 2), interpolation=cv2.INTER_LINEAR)
+        
+    return frame
+
 def process_sequence(args):
-    data_dir, output_dir, split, seq, tau_ms, delta_t_ms, frame_shape, mode = args
+    data_dir, output_dir, split, seq, tau_ms, delta_t_ms, frame_shape, mode, downsample = args
     print(f"Processing : {seq} in split: {split}")
 
     tau_us = tau_ms * 1000
@@ -114,11 +119,9 @@ def process_sequence(args):
 
         # ラベルの取得（tau_ms基準で取得）
         if detections.size > 0:
-            # tau_msの時刻tでのラベルを取得
             label_mask = (detections['t'] >= (t - tau_us / 2)) & (detections['t'] < (t + tau_us / 2))
             slice_detections = detections[label_mask]
 
-            # track_idで重複を取り除く処理
             unique_detections = {}
             for det in slice_detections:
                 track_id = det['track_id']
@@ -128,10 +131,10 @@ def process_sequence(args):
             labels = [
                 {
                     't': det['t'],
-                    'x': det['x'],
-                    'y': det['y'],
-                    'w': det['w'],
-                    'h': det['h'],
+                    'x': det['x'] // 2 if downsample else det['x'],  # downsampleがTrueの場合に座標を半分に
+                    'y': det['y'] // 2 if downsample else det['y'],
+                    'w': det['w'] // 2 if downsample else det['w'],
+                    'h': det['h'] // 2 if downsample else det['h'],
                     'class_id': det['class_id'],
                     'class_confidence': det['class_confidence'],
                     'track_id': det['track_id']
@@ -141,20 +144,17 @@ def process_sequence(args):
         else:
             labels = []
 
-
         # フレームの作成
-        event_frame = create_event_frame(slice_events, frame_shape)
+        event_frame = create_event_frame(slice_events, frame_shape, downsample=downsample)
 
         # 出力ファイルの保存
         output_file = os.path.join(seq_output_dir, f"{int(data_start)}_to_{int(data_end)}.npz")
         if os.path.exists(output_file):
-            continue  # 既に処理済みの場合はスキップ
+            continue
 
         np.savez_compressed(output_file, event=event_frame, labels=labels)
 
-
     print(f"Completed processing sequence: {seq} in split: {split}")
-
 
 def main(config):
     input_dir = config["input_dir"]
@@ -163,14 +163,15 @@ def main(config):
     tau_ms = config["tau_ms"]
     delta_t_ms = config["delta_t_ms"]
     frame_shape = tuple(config["frame_shape"])
-    mode = config.get("mode", "gen1")  # デフォルトはgen1に設定
+    mode = config.get("mode", "gen1")
+    downsample = config.get("downsample", False)  # デフォルトはFalse
 
     splits = ['train', 'test', 'val']
     sequences = [(split, seq) for split in splits for seq in os.listdir(os.path.join(input_dir, split)) if os.path.isdir(os.path.join(input_dir, split, seq))]
 
     with tqdm(total=len(sequences), desc="Processing sequences") as pbar:
         with get_context('spawn').Pool(processes=num_processors) as pool:
-            args_list = [(input_dir, output_dir, split, seq, tau_ms, delta_t_ms, frame_shape, mode) for split, seq in sequences]
+            args_list = [(input_dir, output_dir, split, seq, tau_ms, delta_t_ms, frame_shape, mode, downsample) for split, seq in sequences]
             for _ in pool.imap_unordered(process_sequence, args_list):
                 pbar.update()
 

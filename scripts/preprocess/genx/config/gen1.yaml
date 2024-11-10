@@ -8,3 +8,4 @@ tau_ms: 50       # イベントを取得する間隔（ミリ秒）
 delta_t_ms: 10   # 各取得におけるイベントの長さ（ミリ秒）
 
 frame_shape: [240, 304]
+downsample: false
