@@ -59,6 +59,22 @@ def create_event_frame(slice_events, frame_shape, downsample=False):
         
     return frame
 
+def prophesee_bbox_filter(labels: np.ndarray, dataset_type: str) -> np.ndarray:
+    assert dataset_type in {'gen1', 'gen4'}
+
+    # デフォルト値
+    min_box_diag = 60 if dataset_type == 'gen4' else 30
+    min_box_side = 20 if dataset_type == 'gen4' else 10
+
+    w_lbl = labels['w']
+    h_lbl = labels['h']
+
+    diag_ok = w_lbl ** 2 + h_lbl ** 2 >= min_box_diag ** 2
+    side_ok = (w_lbl >= min_box_side) & (h_lbl >= min_box_side)
+    keep = diag_ok & side_ok
+    labels = labels[keep]
+    return labels
+
 def process_sequence(args):
     data_dir, output_dir, split, seq, tau_ms, delta_t_ms, frame_shape, mode, downsample = args
     print(f"Processing : {seq} in split: {split}")
@@ -66,18 +82,15 @@ def process_sequence(args):
     tau_us = tau_ms * 1000
     delta_t_us = delta_t_ms * 1000
 
-    # 出力ディレクトリの作成
     seq_output_dir = os.path.join(output_dir, split, seq, f"tau={tau_ms}_dt={delta_t_ms}")
     os.makedirs(seq_output_dir, exist_ok=True)
 
     sequence_dir = os.path.join(data_dir, split, seq)
     event_file, bbox_file = find_event_and_bbox_files(sequence_dir, mode)
 
-    # データファイルパスの取得
     event_path = os.path.join(sequence_dir, event_file)
     bbox_path = os.path.join(sequence_dir, bbox_file)
 
-    # イベントデータの読み込み
     with h5py.File(event_path, 'r') as f:
         events = {
             't': f['events']['t'][:],
@@ -86,7 +99,6 @@ def process_sequence(args):
             'p': f['events']['p'][:]
         }
 
-    # BBOXデータの読み込み
     if os.path.exists(bbox_path):
         detections = np.load(bbox_path)
     else:
@@ -95,18 +107,13 @@ def process_sequence(args):
     events['t'] = events['t'].astype(np.float64)
     detections['t'] = detections['t'].astype(np.float64)
 
-    # 開始時刻の調整
-    start_time = max(events['t'][0], 10000)  # 10000 usから開始
-
-    # ウィンドウの中心時刻を定義
+    start_time = max(events['t'][0], 10000)
     window_times = np.arange(start_time, events['t'][-1], tau_us)
 
-    # メイン処理
     for t in window_times:
         data_start = t - delta_t_us
         data_end = t
 
-        # イベントデータのスライス（delta_tの範囲でスライス）
         start_idx = np.searchsorted(events['t'], data_start)
         end_idx = np.searchsorted(events['t'], data_end)
 
@@ -117,7 +124,6 @@ def process_sequence(args):
             'p': events['p'][start_idx:end_idx],
         }
 
-        # ラベルの取得（tau_ms基準で取得）
         if detections.size > 0:
             label_mask = (detections['t'] >= (t - tau_us / 2)) & (detections['t'] < (t + tau_us / 2))
             slice_detections = detections[label_mask]
@@ -131,7 +137,7 @@ def process_sequence(args):
             labels = [
                 {
                     't': det['t'],
-                    'x': det['x'] // 2 if downsample else det['x'],  # downsampleがTrueの場合に座標を半分に
+                    'x': det['x'] // 2 if downsample else det['x'],
                     'y': det['y'] // 2 if downsample else det['y'],
                     'w': det['w'] // 2 if downsample else det['w'],
                     'h': det['h'] // 2 if downsample else det['h'],
@@ -141,13 +147,41 @@ def process_sequence(args):
                 }
                 for det in unique_detections.values()
             ]
+
+            # フィルタリングの前に、labelsをBBOX_DTYPEのndarrayに変換
+            labels_array = np.array([
+                (
+                    label['t'],
+                    label['x'],
+                    label['y'],
+                    label['w'],
+                    label['h'],
+                    label['class_id'],
+                    label['track_id'],
+                    label['class_confidence']
+                ) for label in labels
+            ], dtype=BBOX_DTYPE)
+
+            labels_filtered = prophesee_bbox_filter(labels_array, mode)
+
+            labels = [
+            {
+                't': label['t'],
+                'x': label['x'],
+                'y': label['y'],
+                'w': label['w'],
+                'h': label['h'],
+                'class_id': label['class_id'],
+                'class_confidence': label['class_confidence'],
+                'track_id': label['track_id']
+            }
+            for label in labels_filtered
+]
+
         else:
             labels = []
 
-        # フレームの作成
         event_frame = create_event_frame(slice_events, frame_shape, downsample=downsample)
-
-        # 出力ファイルの保存
         output_file = os.path.join(seq_output_dir, f"{int(data_start)}_to_{int(data_end)}.npz")
         if os.path.exists(output_file):
             continue
@@ -155,6 +189,7 @@ def process_sequence(args):
         np.savez_compressed(output_file, event=event_frame, labels=labels)
 
     print(f"Completed processing sequence: {seq} in split: {split}")
+
 
 def main(config):
     input_dir = config["input_dir"]
