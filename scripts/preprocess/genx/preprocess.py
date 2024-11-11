@@ -9,6 +9,7 @@ import argparse
 import re
 import cv2  # OpenCVを使用して解像度変更
 import json
+import time
 
 # BBOXデータタイプ
 BBOX_DTYPE = np.dtype({
@@ -207,6 +208,7 @@ def process_sequence(args):
 
     print(f"Completed processing sequence: {seq} in split: {split}")
 
+
 def main(config):
     input_dir = config["input_dir"]
     output_dir = config["output_dir"]
@@ -234,4 +236,13 @@ if __name__ == '__main__':
     with open(args.config, 'r') as f:
         config = yaml.safe_load(f)
 
+    # 開始時間を記録
+    start_time = time.time()
+
+    # メイン処理を実行
     main(config)
+
+    # 終了時間を記録して経過時間を表示
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    print(f"並列処理の完了時間: {elapsed_time:.2f} 秒")
