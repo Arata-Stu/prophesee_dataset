@@ -8,6 +8,7 @@ import yaml
 import argparse
 import re
 import cv2  # OpenCVを使用して解像度変更
+import json
 
 # BBOXデータタイプ
 BBOX_DTYPE = np.dtype({
@@ -91,6 +92,9 @@ def process_sequence(args):
     event_path = os.path.join(sequence_dir, event_file)
     bbox_path = os.path.join(sequence_dir, bbox_file)
 
+    # インデックスリストの初期化
+    index_list = []
+
     with h5py.File(event_path, 'r') as f:
         events = {
             't': f['events']['t'][:],
@@ -134,20 +138,6 @@ def process_sequence(args):
                 if track_id not in unique_detections or det['t'] > unique_detections[track_id]['t']:
                     unique_detections[track_id] = det
 
-            labels = [
-                {
-                    't': det['t'],
-                    'x': det['x'] // 2 if downsample else det['x'],
-                    'y': det['y'] // 2 if downsample else det['y'],
-                    'w': det['w'] // 2 if downsample else det['w'],
-                    'h': det['h'] // 2 if downsample else det['h'],
-                    'class_id': det['class_id'],
-                    'class_confidence': det['class_confidence'],
-                    'track_id': det['track_id']
-                }
-                for det in unique_detections.values()
-            ]
-
             # フィルタリングの前に、labelsをBBOX_DTYPEのndarrayに変換
             labels_array = np.array([
                 (
@@ -159,37 +149,63 @@ def process_sequence(args):
                     label['class_id'],
                     label['track_id'],
                     label['class_confidence']
-                ) for label in labels
+                ) for label in unique_detections.values()
             ], dtype=BBOX_DTYPE)
 
             labels_filtered = prophesee_bbox_filter(labels_array, mode)
 
             labels = [
-            {
-                't': label['t'],
-                'x': label['x'],
-                'y': label['y'],
-                'w': label['w'],
-                'h': label['h'],
-                'class_id': label['class_id'],
-                'class_confidence': label['class_confidence'],
-                'track_id': label['track_id']
-            }
-            for label in labels_filtered
-]
-
+                {
+                    't': label['t'],
+                    'x': label['x'] // 2 if downsample else label['x'],
+                    'y': label['y'] // 2 if downsample else label['y'],
+                    'w': label['w'] // 2 if downsample else label['w'],
+                    'h': label['h'] // 2 if downsample else label['h'],
+                    'class_id': label['class_id'],
+                    'class_confidence': label['class_confidence'],
+                    'track_id': label['track_id']
+                }
+                for label in labels_filtered
+            ]
         else:
             labels = []
 
+        # イベントフレームを作成
         event_frame = create_event_frame(slice_events, frame_shape, downsample=downsample)
-        output_file = os.path.join(seq_output_dir, f"{int(data_start)}_to_{int(data_end)}.npz")
-        if os.path.exists(output_file):
-            continue
 
-        np.savez_compressed(output_file, event=event_frame, labels=labels)
+        # ファイル名の定義
+        timestamp_str = f"{int(data_start)}_to_{int(data_end)}"
+        event_file_name = os.path.join(seq_output_dir, f"{timestamp_str}_event.npz")
+        label_file_name = os.path.join(seq_output_dir, f"{timestamp_str}_label.npz")
+
+        # イベントフレームを圧縮形式で保存
+        if not os.path.exists(event_file_name):
+            np.savez_compressed(event_file_name, events=event_frame)
+
+        # ラベルが存在する場合のみ圧縮形式で保存
+        if labels:
+            if not os.path.exists(label_file_name):
+                np.savez_compressed(label_file_name, labels=labels)
+            has_label = True
+        else:
+            has_label = False
+            label_file_name = None  # ラベルファイルがない場合はNoneに設定
+
+
+        # インデックスリストに追加
+        index_entry = {
+            'event_file': event_file_name,
+            'label_file': label_file_name,
+            'timestamp': (int(data_start), int(data_end))
+        }
+        index_list.append(index_entry)
+
+    # インデックスファイルをJSON形式で保存
+    index_file_path = os.path.join(seq_output_dir, 'index.json')
+    with open(index_file_path, 'w') as index_file:
+        json.dump(index_list, index_file)
 
     print(f"Completed processing sequence: {seq} in split: {split}")
-
 
 def main(config):
     input_dir = config["input_dir"]
@@ -199,7 +215,7 @@ def main(config):
     delta_t_ms = config["delta_t_ms"]
     frame_shape = tuple(config["frame_shape"])
     mode = config.get("mode", "gen1")
-    downsample = config.get("downsample", False)  # デフォルトはFalse
+    downsample = config.get("downsample", False)
 
     splits = ['train', 'test', 'val']
     sequences = [(split, seq) for split in splits for seq in os.listdir(os.path.join(input_dir, split)) if os.path.isdir(os.path.join(input_dir, split, seq))]
