@@ -99,6 +99,7 @@ class SequenceDataset(Dataset):
             'events': torch.stack(frames),
             'labels': labels_sequence,
             'timestamps': torch.tensor(timestamps, dtype=torch.int64),
+            'is_start_sequence': True if self.mode == 'train' else (idx == 0),
             'mask': torch.tensor(mask, dtype=torch.int64)
         }
 
