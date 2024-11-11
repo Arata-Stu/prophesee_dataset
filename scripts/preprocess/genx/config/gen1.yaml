@@ -1,7 +1,7 @@
 mode: gen1
 
 input_dir: "/Users/at/dataset/gen1/"
-output_dir: "/Users/at/dataset/gen1_pre/"
+output_dir: "/Users/at/dataset/gen1_pre_2/"
 num_processors: 2
 
 tau_ms: 50       # イベントを取得する間隔（ミリ秒）

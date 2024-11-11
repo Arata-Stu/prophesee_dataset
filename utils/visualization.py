@@ -19,7 +19,7 @@ def save_sequence_as_video(dataset: Any, start_index: int, end_index: int, t_ms:
     
     # サンプルデータから画像サイズを取得
     sample = dataset[start_index]
-    _, h, w = sample['event'][0].shape  # (ch, h, w)のshapeを取得
+    _, h, w = sample['events'][0].shape  # (ch, h, w)のshapeを取得
     size = (w, h)
     
     # VideoWriterのセットアップ
@@ -28,7 +28,7 @@ def save_sequence_as_video(dataset: Any, start_index: int, end_index: int, t_ms:
 
     for index in range(start_index, end_index):
         sample = dataset[index]
-        events = sample['event']
+        events = sample['events']
         labels = sample['labels']
         mask = sample.get('mask', None)  # マスクデータを取得、なければNone
 
